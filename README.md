@@ -80,8 +80,7 @@ To run the internal unit tests (which validate the memory pool, intrusive lists,
 
 ## Performance Profile
 * `Time Complexity`
-	* `AddOrderRequest:` $O(1)$. Bitset-indexed tracking removes the previous $O(\log N)$ tree traversal bottleneck.
-	* `CancelOrderRequest:` $O(1)$.
+	* Add Order: $O(1)$.
+	* Cancel Order: $O(1)$.
 	
-* `Space Complexity`
-	* $O(N + R)$, where $N$ is the number of orders and $R$ is the price range. We pre-allocate the price array and bitset to ensure deterministic latency at the expense of static memory usage.
+* `Space Complexity:` $O(N + P)$ where $N$ is max orders and $P$ is active price levels. Memory usage is strictly bounded at start-up time to prevent fragmentation.
