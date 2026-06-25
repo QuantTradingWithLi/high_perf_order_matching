@@ -1,4 +1,4 @@
-# High-Perormance Order Matching Engine
+# High-Performance Order Matching Engine
 
 ## Disclaimer
 _All materials in this repository, including text, code, and documentation, were created entirely by me. This project is an independent work inspired by common practices in quantitative finance and software design. It is **not affiliated with, endorsed by, or derived from any proprietary materials** belonging to any organization._
