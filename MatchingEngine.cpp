@@ -4,8 +4,10 @@
 MatchingEngine::MatchingEngine(size_t max_orders) noexcept 
     : bids(std::make_unique<PriceLevel[]>(MAX_PRICE_RANGE)),
       asks(std::make_unique<PriceLevel[]>(MAX_PRICE_RANGE)),
-      active_bids(std::make_unique<std::bitset<MAX_PRICE_RANGE>>()),
-      active_asks(std::make_unique<std::bitset<MAX_PRICE_RANGE>>()) {
+      active_bids(),
+      active_asks(),
+      highest_bid(0),
+      lowest_ask(MAX_PRICE_RANGE) {
     orderPool.resize(max_orders);
     freeList.reserve(max_orders);
     for (size_t i = 0; i < max_orders; ++i) freeList.push_back(&orderPool[i]);
@@ -45,7 +47,8 @@ void MatchingEngine::addOrder(uint64_t id, Side side, uint64_t quantity, uint64_
             if (node) {
                 *node = agg_temp;
                 bids[price].push_back(node);
-                active_bids->set(price);
+                active_bids.set(price); // Use .set()
+                if (price > highest_bid) highest_bid = price;
                 directory[id] = node;
             }
         }
@@ -56,7 +59,8 @@ void MatchingEngine::addOrder(uint64_t id, Side side, uint64_t quantity, uint64_
             if (node) {
                 *node = agg_temp;
                 asks[price].push_back(node);
-                active_asks->set(price);
+                active_asks.set(price); // Use .set()
+                if (price < lowest_ask) lowest_ask = price;
                 directory[id] = node;
             }
         }
@@ -70,10 +74,10 @@ void MatchingEngine::cancelOrder(uint64_t id) noexcept {
         if (node->price >= MAX_PRICE_RANGE) return;
         if (node->side == Side::BUY) {
             bids[node->price].remove(node);
-            if (bids[node->price].empty()) active_bids->reset(node->price);
+            if (bids[node->price].empty()) active_bids.reset(node->price); // Use .reset()
         } else {
             asks[node->price].remove(node);
-            if (asks[node->price].empty()) active_asks->reset(node->price);
+            if (asks[node->price].empty()) active_asks.reset(node->price); // Use .reset()
         }
         deallocateNode(node);
     }

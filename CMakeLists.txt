@@ -7,3 +7,4 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=native -pthread")
 
 add_executable(matching_engine main.cpp MatchingEngine.cpp FastIO.cpp)
 add_executable(matching_engine_tests test.cpp MatchingEngine.cpp FastIO.cpp)
+add_executable(matching_engine_benchmark benchmark.cpp MatchingEngine.cpp FastIO.cpp)

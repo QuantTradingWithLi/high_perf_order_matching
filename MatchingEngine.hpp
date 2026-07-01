@@ -31,17 +31,19 @@ private:
     std::vector<OrderNode*> freeList;
     std::unordered_map<uint64_t, OrderNode*> directory;
 
-    // Unique pointers for heap allocation to avoid stack overflow
     std::unique_ptr<PriceLevel[]> bids;
     std::unique_ptr<PriceLevel[]> asks;
-    std::unique_ptr<std::bitset<MAX_PRICE_RANGE>> active_bids;
-    std::unique_ptr<std::bitset<MAX_PRICE_RANGE>> active_asks;
+    
+    std::bitset<MAX_PRICE_RANGE> active_bids;
+    std::bitset<MAX_PRICE_RANGE> active_asks;
+
+    uint64_t highest_bid = 0;
+    uint64_t lowest_ask = MAX_PRICE_RANGE;
 
     OrderNode* allocateNode() noexcept;
     void deallocateNode(OrderNode* node) noexcept;
     void executeTrade(OrderNode* agg, OrderNode* resting, uint64_t trade_qty) noexcept;
 
-    // Generic processor to handle Buy/Sell symmetry
     template <Side S>
     void processOrder(OrderNode* agg) noexcept;
 
@@ -54,13 +56,13 @@ public:
 
 template <Side S>
 void MatchingEngine::processOrder(OrderNode* agg) noexcept {
-    auto& active_levels = (S == Side::BUY) ? *active_asks : *active_bids;
+    auto& active_levels = (S == Side::BUY) ? active_asks : active_bids;
     auto& book = (S == Side::BUY) ? asks : bids;
 
     if constexpr (S == Side::BUY) {
-        for (uint64_t p = 0; p <= agg->price && p < MAX_PRICE_RANGE; ++p) {
+        // Ascending scan using bitset _Find_first / _Find_next
+        for (size_t p = active_levels._Find_first(); p <= agg->price && p < MAX_PRICE_RANGE; p = active_levels._Find_next(p)) {
             if (agg->quantity == 0) break;
-            if (!active_levels.test(p)) continue;
             
             OrderNode* resting = book[p].head;
             while (agg->quantity > 0 && resting != nullptr) {
@@ -73,9 +75,15 @@ void MatchingEngine::processOrder(OrderNode* agg) noexcept {
             if (book[p].empty()) active_levels.reset(p);
         }
     } else {
-        for (int64_t p = MAX_PRICE_RANGE - 1; p >= 0 && p >= (int64_t)agg->price; --p) {
+        // Descending scan starting from highest_bid, skipping empty blocks[cite: 1]
+        int64_t p = (int64_t)highest_bid;
+        while (p >= 0 && p >= (int64_t)agg->price) {
             if (agg->quantity == 0) break;
-            if (!active_levels.test(p)) continue;
+            if (!active_levels.test(p)) {
+                // Skip empty ticks by moving to the next block boundary
+                p = (p / 64) * 64 - 1;
+                continue;
+            }
             
             OrderNode* resting = book[p].head;
             while (agg->quantity > 0 && resting != nullptr) {
@@ -86,6 +94,7 @@ void MatchingEngine::processOrder(OrderNode* agg) noexcept {
                 resting = next_resting;
             }
             if (book[p].empty()) active_levels.reset(p);
+            p--;
         }
     }
 }
