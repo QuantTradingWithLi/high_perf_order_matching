@@ -78,10 +78,17 @@ To run the internal unit tests (which validate the memory pool, intrusive lists,
 ./matching_engine_tests
 ```
 
+## Benchmark
+To run the benchmark:
+
+```bash
+./matching_engine_benchmark
+```
+
 ## Performance Profile
 * `Time Complexity`
-	* Add Order: $O(1)$ average case. The insertion into the std::unordered_map is $O(1)$ average, and finding the correct PriceLevel via the std::bitset is effectively $O(1)$ due to hardware-accelerated bit manipulation (scanning 64-bit words at a time). The subsequent insertion into the intrusive linked list at that price level is $O(1)$.
-	* Cancel Order: $O(1)$ average case. By using an std::unordered_map to store pointers to OrderNode objects, you achieve constant-time lookup and removal from the intrusive linked list.
-	* Matching/Traversal: $O(K)$, where $K$ is the number of active price levels containing liquidity. Because the std::bitset allows you to skip all empty price levels, you avoid the $O(P)$ complexity (where $P$ is the total tick domain of 20,000,000).
+	* `Add Order:` $O(1)$ average case. The insertion into the std::unordered_map is $O(1)$ average, and finding the correct PriceLevel via the std::bitset is effectively $O(1)$ due to hardware-accelerated bit manipulation (scanning 64-bit words at a time). The subsequent insertion into the intrusive linked list at that price level is $O(1)$.
+	* `Cancel Order:` $O(1)$ average case. By using an std::unordered_map to store pointers to OrderNode objects, you achieve constant-time lookup and removal from the intrusive linked list.
+	* `Matching/Traversal:` $O(K)$, where $K$ is the number of active price levels containing liquidity. Because the std::bitset allows you to skip all empty price levels, you avoid the $O(P)$ complexity (where $P$ is the total tick domain of 20,000,000).
 	
 * `Space Complexity:` $O(N + P)$, where $N$ is the maximum number of orders (governed by your freeList capacity) and $P$ is the total price domain (the size of your std::bitset and price-level arrays). Memory usage is pre-allocated at start-up to ensure deterministic performance.
