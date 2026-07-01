@@ -87,8 +87,8 @@ To run the benchmark:
 
 ## Performance Profile
 * `Time Complexity`
-	* `Add Order:` $O(1)$ average case. The insertion into the std::unordered_map is $O(1)$ average, and finding the correct PriceLevel via the std::bitset is effectively $O(1)$ due to hardware-accelerated bit manipulation (scanning 64-bit words at a time). The subsequent insertion into the intrusive linked list at that price level is $O(1)$.
-	* `Cancel Order:` $O(1)$ average case. By using an std::unordered_map to store pointers to OrderNode objects, you achieve constant-time lookup and removal from the intrusive linked list.
-	* `Matching/Traversal:` $O(K)$, where $K$ is the number of active price levels containing liquidity. Because the std::bitset allows you to skip all empty price levels, you avoid the $O(P)$ complexity (where $P$ is the total tick domain of 20,000,000).
+	* `Add Order:` $O(1)$ average case. Insertion into the std::unordered_map is $O(1)$, and finding the correct PriceLevel via std::bitset is effectively $O(1)$ due to hardware-accelerated bit manipulation. Insertion into the intrusive linked list is $O(1)$.
+	* `Cancel Order:` $O(1)$ average case. Enabled by using std::unordered_map for direct access to the order node.
+	* `Matching/Traversal:` $O(K)$, where $K$ is the number of active price levels containing liquidity, bypassing the $O(P)$ tick domain.
 	
-* `Space Complexity:` $O(N + P)$, where $N$ is the maximum number of orders (governed by your freeList capacity) and $P$ is the total price domain (the size of your std::bitset and price-level arrays). Memory usage is pre-allocated at start-up to ensure deterministic performance.
+* `Space Complexity:` $O(N + P)$, where $N$ is the maximum number of orders (governed by the freeList capacity) and $P$ is the total price domain size. Memory usage is strictly bounded at start-up time to prevent fragmentation.
