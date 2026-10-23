@@ -26,3 +26,11 @@ add_test(NAME matching_engine_differential_tests
 add_executable(matching_engine_bitmap_tests price_bitmap_test.cpp)
 add_test(NAME matching_engine_bitmap_tests
     COMMAND matching_engine_bitmap_tests)
+
+add_executable(matching_engine_flat_hash_map_tests flat_hash_map_test.cpp)
+add_test(NAME matching_engine_flat_hash_map_tests
+    COMMAND matching_engine_flat_hash_map_tests)
+
+add_executable(matching_engine_spsc_queue_tests spsc_queue_test.cpp)
+add_test(NAME matching_engine_spsc_queue_tests
+    COMMAND matching_engine_spsc_queue_tests)
