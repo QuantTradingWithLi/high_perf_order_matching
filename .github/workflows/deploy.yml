@@ -44,12 +44,12 @@ jobs:
         run: |
           set -euo pipefail
           name="matching-engine-${GITHUB_REF_NAME}-linux-x86_64"
-          stage="dist/${name}"
-          mkdir -p "${stage}/bin"
+          stage="staging/${name}"
+          mkdir -p "${stage}/bin" dist
           install -m 0755 build/matching_engine "${stage}/bin/"
           install -m 0755 build/matching_engine_benchmark "${stage}/bin/"
           install -m 0644 README.md LICENSE.txt test_data.txt "${stage}/"
-          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          tar -C staging -czf "dist/${name}.tar.gz" "${name}"
           (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
           ls -lh dist
 
