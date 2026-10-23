@@ -13,3 +13,16 @@ endif()
 add_executable(matching_engine main.cpp MatchingEngine.cpp FastIO.cpp)
 add_executable(matching_engine_tests test.cpp MatchingEngine.cpp FastIO.cpp)
 add_executable(matching_engine_benchmark benchmark.cpp MatchingEngine.cpp FastIO.cpp)
+
+enable_testing()
+
+add_test(NAME matching_engine_tests COMMAND matching_engine_tests)
+
+add_executable(matching_engine_differential_tests
+    differential_test.cpp MatchingEngine.cpp FastIO.cpp)
+add_test(NAME matching_engine_differential_tests
+    COMMAND matching_engine_differential_tests)
+
+add_executable(matching_engine_bitmap_tests price_bitmap_test.cpp)
+add_test(NAME matching_engine_bitmap_tests
+    COMMAND matching_engine_bitmap_tests)

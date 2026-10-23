@@ -1,17 +1,128 @@
 #include "MatchingEngine.hpp"
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
+#include <iostream>
+#include <memory>
+#include <streambuf>
+
+class NullBuffer : public std::streambuf {
+protected:
+    std::streamsize xsputn(const char*, std::streamsize n) override { return n; }
+    int overflow(int c) override { return c; }
+};
+
+class ScopedCoutRedirect {
+public:
+    ScopedCoutRedirect() : previous_(std::cout.rdbuf(&null_)) {}
+    ~ScopedCoutRedirect() {
+        std::cout.flush();
+        std::cout.rdbuf(previous_);
+    }
+
+private:
+    NullBuffer null_;
+    std::streambuf* previous_;
+};
+
+using Clock = std::chrono::steady_clock;
+
+template <typename F>
+static double time_ms(F&& fn) {
+    const auto start = Clock::now();
+    fn();
+    const auto end = Clock::now();
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+static size_t count_active(const MatchingEngine& engine, int max_id) {
+    size_t active = 0;
+    for (int id = 1; id <= max_id; ++id) {
+        active += engine.isOrderActive(static_cast<uint64_t>(id)) ? 1 : 0;
+    }
+    return active;
+}
+
+static int failures = 0;
+
+static void report(const char* label, int n, double ms, size_t remaining,
+                   size_t expected) {
+    std::printf("%-34s n=%d  %8.3f ms  %8.3f us/order", label, n, ms,
+                ms * 1000.0 / n);
+    if (remaining != expected) {
+        std::printf("  remaining=%zu expected=%zu FAIL", remaining, expected);
+        ++failures;
+    }
+    std::printf("\n");
+}
+
+static void bench_add_only(Side side, int n, const char* label) {
+    auto engine = std::make_unique<MatchingEngine>(static_cast<size_t>(n) + 10);
+    const double ms = time_ms([&] {
+        for (int i = 0; i < n; ++i) {
+            engine->addOrder(static_cast<uint64_t>(i + 1), side, 10, 1000000);
+        }
+    });
+    report(label, n, ms, count_active(*engine, n), static_cast<size_t>(n));
+}
+
+static void bench_match_buy(int n) {
+    auto engine = std::make_unique<MatchingEngine>(static_cast<size_t>(2 * n) + 10);
+    for (int i = 0; i < n; ++i) {
+        engine->addOrder(static_cast<uint64_t>(i + 1), Side::SELL, 10,
+                         1000000 + static_cast<uint64_t>(i));
+    }
+
+    const double ms = time_ms([&] {
+        for (int i = 0; i < n; ++i) {
+            engine->addOrder(static_cast<uint64_t>(n + i + 1), Side::BUY, 10,
+                             2000000);
+        }
+    });
+    report("buy sweeps ask levels", n, ms, count_active(*engine, 2 * n), 0);
+}
+
+static void bench_match_sell(int n) {
+    auto engine = std::make_unique<MatchingEngine>(static_cast<size_t>(2 * n) + 10);
+    for (int i = 0; i < n; ++i) {
+        engine->addOrder(static_cast<uint64_t>(i + 1), Side::BUY, 10,
+                         1000000 - static_cast<uint64_t>(i));
+    }
+
+    const double ms = time_ms([&] {
+        for (int i = 0; i < n; ++i) {
+            engine->addOrder(static_cast<uint64_t>(n + i + 1), Side::SELL, 10, 0);
+        }
+    });
+    report("sell sweeps bid levels", n, ms, count_active(*engine, 2 * n), 0);
+}
+
+static void bench_cancel(int n) {
+    auto engine = std::make_unique<MatchingEngine>(static_cast<size_t>(n) + 10);
+    for (int i = 0; i < n; ++i) {
+        engine->addOrder(static_cast<uint64_t>(i + 1), Side::BUY, 10, 1000000);
+    }
+
+    const double ms = time_ms([&] {
+        for (int i = 0; i < n; ++i) {
+            engine->cancelOrder(static_cast<uint64_t>(i + 1));
+        }
+    });
+    report("cancel resting orders", n, ms, count_active(*engine, n), 0);
+}
 
 int main() {
-    auto bench = [](Side s, const char* tag) {
-        MatchingEngine eng(1'000'000);                 // empty book
-        auto t0 = std::chrono::steady_clock::now();
-        for (uint64_t i = 0; i < 1000; ++i)
-            eng.addOrder(i + 1, s, /*qty=*/10, /*price=*/100000);  // all just rest
-        auto t1 = std::chrono::steady_clock::now();
-        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-        printf("%-34s : 1000 orders took %8.1f ms (%.3f ms/order)\n", tag, ms, ms / 1000.0);
-    };
-    bench(Side::BUY,  "BUY  (scans [0, price])");
-    bench(Side::SELL, "SELL (scans [price, 20,000,000))");
+    std::ios_base::sync_with_stdio(false);
+    ScopedCoutRedirect redirect_output;
+
+    std::printf("Matching engine benchmark (engine output suppressed)\n\n");
+    constexpr int N = 5000;
+    bench_add_only(Side::BUY, N, "add-only buys");
+    bench_add_only(Side::SELL, N, "add-only sells");
+    bench_match_buy(N);
+    bench_match_sell(N);
+    bench_cancel(N);
+
+    return failures == 0 ? 0 : 1;
 }
