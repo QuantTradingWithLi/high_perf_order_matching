@@ -5,7 +5,7 @@ _All materials in this repository, including text, code, and documentation, were
 
 
 ## Description
-A high-performance order-matching engine implemented in C++20. This engine minimizes jitter and latency through zero-allocation object pools, intrusive linked lists, and HFT-standard performance primitives.
+A high-performance order-matching engine implemented in C++20. It uses a pre-allocated order pool, packed index-linked order nodes, sparse price-level blocks, and a flat order directory to keep the steady-state matching path free of per-order heap allocation.
 
 ## Functional Specification
 
@@ -40,20 +40,25 @@ The system emits events to `stdout` to notify the system of market activity:
 * **Fill Status**: Emitted when an order is fully satisfied (Order ID).
 * **Partial Fill**: Emitted when an order is partially satisfied, reporting the remaining quantity (Order ID, Remaining Qty).
 
+Prices are written with up to four decimal places, with trailing zeros removed. For example, an internal price of `1005000` is emitted as `100.5`, while `1000000` is emitted as `100`.
+
 ### Error Handling
-The parser implements strict validation. Invalid inputs are identified by the following codes:
-* `-1:` Structural Error (e.g., malformed syntax, missing required fields).
+The parser validates the complete input line, including trailing fields. It rejects unsupported sides, zero quantities, out-of-range prices, extra fields, and numeric fields with trailing junk. Invalid inputs are identified by the following codes:
+* `-1:` Structural Error (e.g., malformed syntax, missing required fields, extra fields).
 * `-2:` Unsupported Message Type (e.g., an ID provided for a type not recognized by the system).
-* `-3:` Data Conversion Error (e.g., non-numeric characters in numeric fields).
+* `-3:` Data Conversion or Range Error (e.g., non-numeric characters, invalid side, zero quantity, or price outside the configured range).
 
 ## Architectural Optimizations
-* **Zero-Allocation Pipeline**: Utilizes pre-allocated object pools and intrusive linked lists to eliminate `malloc`/`free` during runtime.
-* **CPU Affinity**: The matching engine is pinned to dedicated CPU cores via `pthread_setaffinity_np` to prevent kernel-level context switching and cache invalidation.
-* **Bitset-Indexed Price Tracking**: Replaces `std::set` (Red-Black Tree) with a custom `std::bitset` based lookup, ensuring $O(1)$ price level management and cache-friendly traversal.
-* **Branch Prediction**: Critical paths are decorated with `[[likely]]` and `[[unlikely]]` attributes.
-* **Noexcept Pipeline**: Core logic is marked `noexcept`, allowing the compiler to optimize out stack unwinding tables.
-* **SPSC Lock-Free I/O**: Asynchronous I/O handling via a lock-free Single-Producer Single-Consumer ring buffer.
-* **Templated Matching Logic**: Template specialization for `Side::BUY` and `Side::SELL` eliminates branching in the hot path.
+* **Pre-Allocated, Sparse Book**: Order nodes, the order directory, and price bitmaps are sized at startup. Price levels are allocated in 64-price blocks only when a price is first touched, so an empty engine does not reserve a dense 20-million-level array.
+* **Packed 32-Byte Nodes**: Order nodes use 32-bit pool indices for their intrusive links, keeping each node at 32 bytes. The order pool and free list are contiguous and reused after cancels.
+* **Flat Order Directory**: An open-addressing, tombstone-based flat hash map replaces `std::unordered_map` for order-id lookup. The table is reserved at startup and grows only if necessary.
+* **Bidirectional Price Bitmap**: A custom `PriceBitmap` provides best-price, next-price, and previous-price searches without `std::set` or non-portable `std::bitset` extensions.
+* **Best-Price Tracking**: Exact best bid and ask indices avoid rescanning from price zero. Empty levels clear their bitmap bit and update the best price in the same operation.
+* **CPU Affinity**: On Linux, the reader and matching threads attempt to pin to cores 0 and 1 with `pthread_setaffinity_np`; failure is reported as a warning and does not abort the run. Busy waits use the architecture pause instruction where available.
+* **SPSC Lock-Free Input**: The reader parses each line directly into a fixed-size, trivially-copyable `ParsedMessage` and sends it through a cache-line-padded SPSC ring buffer. The engine thread does not parse text or copy `std::string` objects.
+* **Buffered Output**: Trade and fill events are formatted with `std::to_chars` into a 64 KiB buffer rather than performing a stream insertion per field.
+* **Noexcept Engine API**: Core add, cancel, and match paths are marked `noexcept`. The engine still allocates its pools and any newly touched price-level blocks; allocation failure in a `noexcept` path terminates the process rather than throwing.
+* **Templated Matching Logic**: Template specialization for `Side::BUY` and `Side::SELL` eliminates side branching in the hot loop.
 
 ## Build Instructions (Ubuntu 24.04 LTS)
 Ensure CMake and a modern C++20 compiler (`g++` or `clang++`) are installed.
@@ -72,17 +77,25 @@ Run the engine, pinning it to isolated cores (if available):
 ```
 
 ## Testing
-To run the internal unit tests (which validate the memory pool, intrusive lists, and strict error code parsing):
+After building, run all CTest targets:
 
 ```bash
-./matching_engine_tests
+ctest --test-dir build --output-on-failure
+```
+
+The suites cover engine behavior, strict parsing and output formatting, randomized differential matching against a reference book, the price bitmap, the flat hash map, and the SPSC queue.
+
+The original engine test binary can also be run directly:
+
+```bash
+./build/matching_engine_tests
 ```
 
 ## Benchmark
-To run the benchmark:
+The benchmark reports structure sizes, engine construction time, and add-only, buy-sweep, sell-sweep, and cancel workloads with engine output suppressed:
 
 ```bash
-./matching_engine_benchmark
+./build/matching_engine_benchmark
 ```
 
 ## Deployment
@@ -101,8 +114,8 @@ Release binaries are built with `-DENABLE_NATIVE_OPTIMIZATIONS=OFF` so they run 
 
 ## Performance Profile
 * `Time Complexity`
-	* `Add Order:` $O(1)$ average case. Insertion into the std::unordered_map is $O(1)$, and finding the correct PriceLevel via std::bitset is effectively $O(1)$ due to hardware-accelerated bit manipulation. Insertion into the intrusive linked list is $O(1)$.
-	* `Cancel Order:` $O(1)$ average case. Enabled by using std::unordered_map for direct access to the order node.
-	* `Matching/Traversal:` $O(K)$, where $K$ is the number of active price levels containing liquidity, bypassing the $O(P)$ tick domain.
+	* `Add Order:` $O(1)$ expected. The flat directory performs a constant-time expected lookup/insert, the free list supplies a node without allocating, and the intrusive list append is constant time. A new 64-price level block is allocated only the first time that block is touched.
+	* `Cancel Order:` $O(1)$ expected. The order directory provides direct access to the node. If the canceled order empties the best price level, the bitmap finds the next best set bit, which scans at most the remaining bitmap words.
+	* `Matching/Traversal:` $O(K + T + W)$, where $K$ is the number of price levels touched, $T$ is the number of trades, and $W$ is the number of 64-bit bitmap words scanned while moving between active levels. The engine advances between active prices with bitmap-word scans instead of touching every tick slot.
 	
-* `Space Complexity:` $O(N + P)$, where $N$ is the maximum number of orders (governed by the freeList capacity) and $P$ is the total price domain size. Memory usage is strictly bounded at start-up time to prevent fragmentation.
+* `Space Complexity:` $O(N + U + P/64)$, where $N$ is the maximum number of orders, $U$ is the number of touched 64-price level blocks, and $P$ is the price domain. Each order node is 32 bytes, each price level is 8 bytes, each sparse block is 512 bytes, and the two price bitmaps use $P/64$ bits each. The dense $P \times 16$-byte price-level array used by the previous implementation is gone; sparse blocks are allocated only on demand.
