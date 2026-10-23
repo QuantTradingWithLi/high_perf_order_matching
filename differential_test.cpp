@@ -1,21 +1,18 @@
 #include "MatchingEngine.hpp"
+#include "FastIO.hpp"
+
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <deque>
-#include <iostream>
 #include <iterator>
 #include <map>
 #include <memory>
 #include <random>
 #include <set>
-#include <streambuf>
 
-class NullBuffer : public std::streambuf {
-protected:
-    std::streamsize xsputn(const char*, std::streamsize n) override { return n; }
-    int overflow(int c) override { return c; }
-};
+static void discardOutput(const char*, size_t) {}
 
 struct RefOrder {
     uint64_t id;
@@ -101,11 +98,9 @@ struct RefBook {
 };
 
 int main() {
-    std::ios_base::sync_with_stdio(false);
-    NullBuffer null;
-    std::streambuf* oldCout = std::cout.rdbuf(&null);
+    FastIO::setSink(discardOutput);
 
-    constexpr int OPS = 5000;
+    constexpr int OPS = 20000;
     std::mt19937_64 rng(987654321);
     auto engine = std::make_unique<MatchingEngine>(OPS + 10);
     RefBook reference;
@@ -125,7 +120,9 @@ int main() {
             const uint64_t id = next_id++;
             const Side side = (rng() & 1) ? Side::BUY : Side::SELL;
             const uint64_t quantity = 1 + (rng() % 10);
-            const uint64_t price = rng() % 200;
+            const uint64_t price = (rng() & 1)
+                ? (rng() % 200)
+                : (rng() % MAX_PRICE_RANGE);
             reference.add(id, side, quantity, price);
             engine->addOrder(id, side, quantity, price);
         }
@@ -139,7 +136,7 @@ int main() {
                                 op, static_cast<unsigned long long>(id),
                                 expected ? 1 : 0, actual ? 1 : 0);
                     if (++failures > 20) {
-                        std::cout.rdbuf(oldCout);
+                        FastIO::flush();
                         return 1;
                     }
                 }
@@ -147,7 +144,7 @@ int main() {
         }
     }
 
-    std::cout.rdbuf(oldCout);
+    FastIO::flush();
 
     if (failures == 0) {
         std::printf("Differential test passed (%d operations, %llu order ids).\n",
