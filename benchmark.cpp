@@ -1,32 +1,15 @@
 #include "MatchingEngine.hpp"
+#include "FastIO.hpp"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <iostream>
 #include <memory>
-#include <streambuf>
-
-class NullBuffer : public std::streambuf {
-protected:
-    std::streamsize xsputn(const char*, std::streamsize n) override { return n; }
-    int overflow(int c) override { return c; }
-};
-
-class ScopedCoutRedirect {
-public:
-    ScopedCoutRedirect() : previous_(std::cout.rdbuf(&null_)) {}
-    ~ScopedCoutRedirect() {
-        std::cout.flush();
-        std::cout.rdbuf(previous_);
-    }
-
-private:
-    NullBuffer null_;
-    std::streambuf* previous_;
-};
 
 using Clock = std::chrono::steady_clock;
+
+static void discardOutput(const char*, size_t) {}
 
 template <typename F>
 static double time_ms(F&& fn) {
@@ -112,17 +95,34 @@ static void bench_cancel(int n) {
     report("cancel resting orders", n, ms, count_active(*engine, n), 0);
 }
 
-int main() {
-    std::ios_base::sync_with_stdio(false);
-    ScopedCoutRedirect redirect_output;
+static void bench_construct(size_t max_orders) {
+    std::unique_ptr<MatchingEngine> engine;
+    const double ms = time_ms([&] {
+        engine = std::make_unique<MatchingEngine>(max_orders);
+    });
+    std::printf("%-34s max_orders=%zu  %8.3f ms\n", "construct engine",
+                max_orders, ms);
+    engine.reset();
+}
 
-    std::printf("Matching engine benchmark (engine output suppressed)\n\n");
+int main() {
+    FastIO::setSink(discardOutput);
+
+    std::printf("Matching engine benchmark (engine output suppressed)\n");
+    std::printf("sizeof(OrderNode)=%zu  sizeof(PriceLevel)=%zu  "
+                "sizeof(MatchingEngine)=%zu\n\n",
+                sizeof(OrderNode), sizeof(PriceLevel), sizeof(MatchingEngine));
+
     constexpr int N = 5000;
+    bench_construct(1000000);
+    std::printf("\n");
+
     bench_add_only(Side::BUY, N, "add-only buys");
     bench_add_only(Side::SELL, N, "add-only sells");
     bench_match_buy(N);
     bench_match_sell(N);
     bench_cancel(N);
 
+    FastIO::flush();
     return failures == 0 ? 0 : 1;
 }

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <array>
+#include <utility>
 
 // Lock-free Single-Producer Single-Consumer Ring Buffer.
 // Uses cache line padding to prevent "false sharing" where the 
@@ -11,14 +12,16 @@
 template <typename T, size_t Capacity>
 class SPSCQueue {
 private:
+    static_assert(Capacity > 1, "SPSCQueue needs at least two slots");
+
     alignas(64) std::atomic<size_t> tail{0};
     alignas(64) std::atomic<size_t> head{0};
     
-    std::array<T, Capacity> buffer;
+    alignas(64) std::array<T, Capacity> buffer;
 
 public:
     // Pushes an item to the queue. Returns false if full.
-    bool push(const T& item) {
+    bool push(T item) {
         const size_t current_tail = tail.load(std::memory_order_relaxed);
         const size_t next_tail = (current_tail + 1) % Capacity;
         
@@ -27,7 +30,7 @@ public:
             return false; 
         }
         
-        buffer[current_tail] = item;
+        buffer[current_tail] = std::move(item);
         tail.store(next_tail, std::memory_order_release);
         return true;
     }
