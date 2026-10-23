@@ -85,6 +85,20 @@ To run the benchmark:
 ./matching_engine_benchmark
 ```
 
+## Deployment
+
+Pushing a tag in the `vX.X.X` format runs the **Deploy** GitHub Actions workflow. It builds and tests the engine on Ubuntu 24.04, then publishes a GitHub Release containing:
+
+* `matching-engine-vX.X.X-linux-x86_64.tar.gz` with the engine, benchmark, README, license, and sample input.
+* A `.sha256` checksum for the archive.
+
+```bash
+git tag v0.0.1
+git push origin v0.0.1
+```
+
+Release binaries are built with `-DENABLE_NATIVE_OPTIMIZATIONS=OFF` so they run on any x86-64 Linux CPU. Local builds still use `-march=native` by default; pass `-DENABLE_NATIVE_OPTIMIZATIONS=OFF` to `cmake` for a portable build.
+
 ## Performance Profile
 * `Time Complexity`
 	* `Add Order:` $O(1)$ average case. Insertion into the std::unordered_map is $O(1)$, and finding the correct PriceLevel via std::bitset is effectively $O(1)$ due to hardware-accelerated bit manipulation. Insertion into the intrusive linked list is $O(1)$.
