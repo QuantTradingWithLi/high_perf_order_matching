@@ -1,31 +1,45 @@
 #ifndef MATCHING_ENGINE_HPP
 #define MATCHING_ENGINE_HPP
 
-#include <vector>
-#include <unordered_map>
-#include <memory>
 #include <algorithm>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <vector>
+
+#include "FlatHashMap.hpp"
 #include "OrderNode.hpp"
 
 struct PriceLevel {
-    OrderNode* head = nullptr;
-    OrderNode* tail = nullptr;
+    uint32_t head = OrderNode::NIL;
+    uint32_t tail = OrderNode::NIL;
 
-    void push_back(OrderNode* node) noexcept {
-        if (!head) { head = tail = node; node->next = node->prev = nullptr; }
-        else { tail->next = node; node->prev = tail; node->next = nullptr; tail = node; }
+    void push_back(OrderNode* nodes, uint32_t index) noexcept {
+        OrderNode& node = nodes[index];
+        node.prev = tail;
+        node.next = OrderNode::NIL;
+
+        if (tail != OrderNode::NIL) nodes[tail].next = index;
+        else head = index;
+        tail = index;
     }
-    void remove(OrderNode* node) noexcept {
-        if (node->prev) node->prev->next = node->next; else head = node->next;
-        if (node->next) node->next->prev = node->prev; else tail = node->prev;
+
+    void remove(OrderNode* nodes, uint32_t index) noexcept {
+        const OrderNode& node = nodes[index];
+        if (node.prev != OrderNode::NIL) nodes[node.prev].next = node.next;
+        else head = node.next;
+
+        if (node.next != OrderNode::NIL) nodes[node.next].prev = node.prev;
+        else tail = node.prev;
     }
-    bool empty() const noexcept { return head == nullptr; }
+
+    bool empty() const noexcept { return head == OrderNode::NIL; }
 };
 
-static constexpr size_t MAX_PRICE_RANGE = 20000000;
+static_assert(sizeof(PriceLevel) == 8, "PriceLevel must stay packed to 8 bytes");
+
+static constexpr uint32_t MAX_PRICE_RANGE = 20000000;
 
 // Portable price bitmap. Unlike std::bitset's libstdc++-only _Find_first /
 // _Find_next extensions, this supports searching in both directions and keeps
@@ -107,31 +121,64 @@ private:
 
 class MatchingEngine {
 private:
-    std::vector<OrderNode> orderPool;
-    std::vector<OrderNode*> freeList;
-    std::unordered_map<uint64_t, OrderNode*> directory;
+    static constexpr size_t LEVEL_BLOCK_SHIFT = 6;
+    static constexpr size_t LEVEL_BLOCK_SIZE = size_t{1} << LEVEL_BLOCK_SHIFT;
+    static constexpr size_t LEVEL_BLOCK_MASK = LEVEL_BLOCK_SIZE - 1;
+    static constexpr size_t LEVEL_BLOCK_COUNT =
+        (static_cast<size_t>(MAX_PRICE_RANGE) + LEVEL_BLOCK_SIZE - 1) /
+        LEVEL_BLOCK_SIZE;
+    static constexpr uint32_t NO_PRICE = OrderNode::NIL;
 
-    // A price level belongs exclusively to one side: a crossing order is
-    // matched before it can rest, so bids and asks can never coexist at the
-    // same price. One array halves the price-level memory.
-    std::unique_ptr<PriceLevel[]> levels;
+    std::vector<OrderNode> orderPool;
+    std::vector<uint32_t> freeList;
+    FlatHashMap directory;
+
+    // Price levels are allocated in small blocks on first use. The bitmap
+    // tracks which prices are active, so matching never scans the full domain.
+    std::vector<std::unique_ptr<PriceLevel[]>> levelBlocks;
     PriceBitmap active_bids;
     PriceBitmap active_asks;
 
-    size_t highest_bid = PriceBitmap::npos;
-    size_t lowest_ask = PriceBitmap::npos;
+    uint32_t highest_bid = NO_PRICE;
+    uint32_t lowest_ask = NO_PRICE;
 
-    OrderNode* allocateNode() noexcept;
-    void deallocateNode(OrderNode* node) noexcept;
-    void executeTrade(OrderNode* agg, OrderNode* resting, uint64_t trade_qty) noexcept;
-    void onLevelEmpty(Side resting_side, size_t price) noexcept;
+    static size_t clampCapacity(size_t capacity) noexcept {
+        return capacity >= OrderNode::NIL
+            ? static_cast<size_t>(OrderNode::NIL) - 1
+            : capacity;
+    }
+
+    static uint32_t toPrice(size_t index) noexcept {
+        return index == PriceBitmap::npos
+            ? NO_PRICE
+            : static_cast<uint32_t>(index);
+    }
+
+    PriceLevel& levelAt(uint32_t price) noexcept {
+        return levelBlocks[price >> LEVEL_BLOCK_SHIFT][price & LEVEL_BLOCK_MASK];
+    }
+
+    PriceLevel& ensureLevelAt(uint32_t price) {
+        auto& block = levelBlocks[price >> LEVEL_BLOCK_SHIFT];
+        if (!block) {
+            block = std::make_unique<PriceLevel[]>(LEVEL_BLOCK_SIZE);
+        }
+        return block[price & LEVEL_BLOCK_MASK];
+    }
+
+    uint32_t allocateNode() noexcept;
+    void deallocateNode(uint32_t index) noexcept;
+    void executeTrade(OrderNode& agg, OrderNode& resting,
+                      uint64_t trade_qty) noexcept;
+    void onLevelEmpty(Side resting_side, uint32_t price) noexcept;
 
     template <Side S>
     void processOrder(OrderNode* agg) noexcept;
 
 public:
     explicit MatchingEngine(size_t max_orders = 1000000) noexcept;
-    void addOrder(uint64_t id, Side side, uint64_t quantity, uint64_t price) noexcept;
+    void addOrder(uint64_t id, Side side, uint64_t quantity,
+                  uint64_t price) noexcept;
     void cancelOrder(uint64_t id) noexcept;
     bool isOrderActive(uint64_t id) const noexcept;
 };
@@ -139,51 +186,55 @@ public:
 template <Side S>
 void MatchingEngine::processOrder(OrderNode* agg) noexcept {
     if constexpr (S == Side::BUY) {
-        if (lowest_ask == PriceBitmap::npos || lowest_ask > agg->price) return;
+        if (lowest_ask == NO_PRICE || lowest_ask > agg->price) return;
 
-        size_t p = lowest_ask;
-        while (p != PriceBitmap::npos && p <= agg->price) {
-            PriceLevel& level = levels[p];
-            OrderNode* resting = level.head;
+        uint32_t p = lowest_ask;
+        while (p != NO_PRICE && p <= agg->price) {
+            PriceLevel& level = levelAt(p);
+            uint32_t resting_index = level.head;
 
-            while (agg->quantity > 0 && resting != nullptr) {
-                const uint64_t trade_qty = std::min(agg->quantity, resting->quantity);
-                OrderNode* next_resting = resting->next;
+            while (agg->quantity > 0 && resting_index != OrderNode::NIL) {
+                OrderNode& resting = orderPool[resting_index];
+                const uint32_t next_resting = resting.next;
+                const uint64_t trade_qty =
+                    std::min(agg->quantity, resting.quantity);
 
-                executeTrade(agg, resting, trade_qty);
-                if (resting->quantity == 0) {
-                    level.remove(resting);
-                    deallocateNode(resting);
+                executeTrade(*agg, resting, trade_qty);
+                if (resting.quantity == 0) {
+                    level.remove(orderPool.data(), resting_index);
+                    deallocateNode(resting_index);
                 }
-                resting = next_resting;
+                resting_index = next_resting;
             }
 
-            const size_t next = active_asks.find_next(p);
+            const uint32_t next = toPrice(active_asks.find_next(p));
             if (level.empty()) onLevelEmpty(Side::SELL, p);
             if (agg->quantity == 0) break;
             p = next;
         }
     } else {
-        if (highest_bid == PriceBitmap::npos || highest_bid < agg->price) return;
+        if (highest_bid == NO_PRICE || highest_bid < agg->price) return;
 
-        size_t p = highest_bid;
-        while (p != PriceBitmap::npos && p >= agg->price) {
-            PriceLevel& level = levels[p];
-            OrderNode* resting = level.head;
+        uint32_t p = highest_bid;
+        while (p != NO_PRICE && p >= agg->price) {
+            PriceLevel& level = levelAt(p);
+            uint32_t resting_index = level.head;
 
-            while (agg->quantity > 0 && resting != nullptr) {
-                const uint64_t trade_qty = std::min(agg->quantity, resting->quantity);
-                OrderNode* next_resting = resting->next;
+            while (agg->quantity > 0 && resting_index != OrderNode::NIL) {
+                OrderNode& resting = orderPool[resting_index];
+                const uint32_t next_resting = resting.next;
+                const uint64_t trade_qty =
+                    std::min(agg->quantity, resting.quantity);
 
-                executeTrade(agg, resting, trade_qty);
-                if (resting->quantity == 0) {
-                    level.remove(resting);
-                    deallocateNode(resting);
+                executeTrade(*agg, resting, trade_qty);
+                if (resting.quantity == 0) {
+                    level.remove(orderPool.data(), resting_index);
+                    deallocateNode(resting_index);
                 }
-                resting = next_resting;
+                resting_index = next_resting;
             }
 
-            const size_t next = active_bids.find_prev(p);
+            const uint32_t next = toPrice(active_bids.find_prev(p));
             if (level.empty()) onLevelEmpty(Side::BUY, p);
             if (agg->quantity == 0) break;
             p = next;
@@ -191,4 +242,4 @@ void MatchingEngine::processOrder(OrderNode* agg) noexcept {
     }
 }
 
-#endif
+#endif // MATCHING_ENGINE_HPP

@@ -8,21 +8,26 @@ enum class Side : uint8_t {
     SELL = 1
 };
 
-// Aligning to 32 bytes ensures that nodes fit efficiently within cache lines,
-// preventing performance degradation due to crossing cache boundaries.
+// Packed node stored in a contiguous pool. Links are 32-bit pool indices
+// instead of pointers, which keeps the node at 32 bytes and avoids per-order
+// heap allocation. The pool can hold at most OrderNode::NIL - 1 orders.
 struct alignas(32) OrderNode {
-    uint64_t id;
-    uint64_t quantity;
-    uint64_t price;
-    Side side;
-    OrderNode* next;
-    OrderNode* prev;
+    static constexpr uint32_t NIL = 0xFFFFFFFFu;
 
-    OrderNode() 
-        : id(0), quantity(0), price(0), side(Side::BUY), next(nullptr), prev(nullptr) {}
+    uint64_t id = 0;
+    uint64_t quantity = 0;
+    uint32_t price = 0;
+    uint32_t next = NIL;
+    uint32_t prev = NIL;
+    Side side = Side::BUY;
 
-    OrderNode(uint64_t id, uint64_t qty, uint64_t prc, Side s, OrderNode* n, OrderNode* p)
-        : id(id), quantity(qty), price(prc), side(s), next(n), prev(p) {}
+    OrderNode() = default;
+
+    OrderNode(uint64_t id, uint64_t quantity, uint32_t price, Side side)
+        : id(id), quantity(quantity), price(price), side(side) {}
 };
+
+static_assert(sizeof(OrderNode) == 32,
+              "OrderNode must stay packed to 32 bytes");
 
 #endif // ORDER_NODE_HPP
